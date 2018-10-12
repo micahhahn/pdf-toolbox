@@ -197,19 +197,32 @@ pageExtractGlyphs page = do
   is <- do
     contents <- pageContents page
     let Page pdf _ _ = page
-    is <- combinedContent pdf contents
-    Streams.parserToInputStream parseContent is
+    combinedContent pdf contents
+
+  ise <- Streams.parserToInputStream parseContent is
 
   -- use content stream processor to extract text
-  let loop s p = do
+  let loop is s p = do
         next <- readNextOperator s
         case next of
-          Just (Op_Do, [Name name]) -> processDo name p >>= loop s
+          Just (Op_Do, [Name name]) -> processDo name p >>= loop is s
+          Just (Op_BI, []) -> processInlineImage is s >> loop is s p
           Just op ->
             case processOp op p of
               Left err -> throwIO (Unexpected err [])
-              Right  p' -> loop s p'
+              Right  p' -> loop is s p'
           Nothing -> return p
+
+      processInlineImage is s = do
+        id <- readNextOperator s
+        case id of
+          Just (Op_ID, (wn : (Number w) : hn : (Number h) : bpcn : (Number bpc) : _)) -> do
+            imageBytes <- Streams.readExactly (floor $ w * h * bpc / 8 + 1) is
+            end <- readNextOperator s
+            case end of
+              Just (Op_EI, _) -> return ()
+              _ -> error $ "Unexpected end" ++ (show end)
+          _ -> error $ "Unexpected" ++ (show id)
 
       processDo name p = do
         case Map.lookup name xobjects of
@@ -220,10 +233,10 @@ pageExtractGlyphs page = do
               Streams.parserToInputStream parseContent s
 
             let gdec' = prGlyphDecoder p
-            p' <- loop s (p {prGlyphDecoder = gdec})
+            p' <- loop is s (p {prGlyphDecoder = gdec})
             return (p' {prGlyphDecoder = gdec'})
 
-  p <- loop is $ mkProcessor {
+  p <- loop is ise $ mkProcessor {
     prGlyphDecoder = glyphDecoder
     }
   return (prSpans p)
