@@ -30,8 +30,8 @@ import qualified Pdf.Content.Encoding.MacRoman as MacRoman
 import Data.List
 import Data.Maybe
 import Data.Word
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
@@ -50,7 +50,7 @@ data FontInfo
 data FISimple = FISimple {
   fiSimpleUnicodeCMap :: Maybe UnicodeCMap,
   fiSimpleEncoding :: Maybe SimpleFontEncoding,
-  fiSimpleWidths :: Maybe (Int, Int, [Double]),
+  fiSimpleWidths :: Maybe (Map Int Double),
   -- ^ FirstChar, LastChar, list of widths
   fiSimpleFontMatrix :: Transform Double
   }
@@ -180,13 +180,10 @@ fontInfoDecodeGlyphs (FontInfoSimple fi) = \bs ->
         width =
           case fiSimpleWidths fi of
             Nothing -> 0
-            Just (firstChar, lastChar, widths) ->
-              if code >= firstChar && code <= lastChar
-                  && (code - firstChar) < length widths
-                 then let Vector w _ = transform (fiSimpleFontMatrix fi) $
-                            Vector (widths !! (code - firstChar)) 0
-                      in w
-                 else 0
+            Just charMap -> case Map.lookup code charMap of
+              Nothing -> 0
+              Just width -> let Vector w _ = transform (fiSimpleFontMatrix fi) $ Vector width 0
+                            in w
     in (Glyph {
       glyphCode = code,
       glyphTopLeft = Vector 0 0,

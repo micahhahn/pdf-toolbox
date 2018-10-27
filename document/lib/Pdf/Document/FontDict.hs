@@ -18,11 +18,13 @@ import Pdf.Content
 
 import Pdf.Document.Pdf
 import Pdf.Document.Internal.Types
+import Pdf.Document.Internal.FontMetrics
 
 import Data.Word
 import Data.ByteString (ByteString)
 import qualified Data.Vector as Vector
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Map.Strict as Map
 import Control.Monad
 import Control.Exception hiding (throw)
 import qualified System.IO.Streams as Streams
@@ -73,6 +75,7 @@ fontDictLoadInfo fd@(FontDict pdf fontDict) = do
       return $ FontInfoSimple fi {
         fiSimpleFontMatrix = fontMatrix
         }
+    FontType1 -> FontInfoSimple <$> loadFontInfoType1 pdf fontDict
     _ -> FontInfoSimple <$> loadFontInfoSimple pdf fontDict
 
 loadFontInfoComposite :: Pdf -> Dict -> IO FIComposite
@@ -114,49 +117,69 @@ loadFontInfoComposite pdf fontDict = do
     fiCompositeDefaultWidth = defaultWidth
     }
 
+loadFontInfoSimpleEncoding :: Pdf -> Dict -> IO (Maybe SimpleFontEncoding)
+loadFontInfoSimpleEncoding pdf fontDict = 
+  case HashMap.lookup "Encoding" fontDict of
+  Just (Name "WinAnsiEncoding") -> return $ Just SimpleFontEncoding
+    { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
+    , simpleFontDifferences = []
+    }
+  Just (Name "MacRomanEncoding") -> return $ Just SimpleFontEncoding
+    { simpleFontBaseEncoding = FontBaseEncodingMacRoman
+    , simpleFontDifferences = []
+    }
+  Just o -> do
+    o' <- deref pdf o
+    encDict <- sure (dictValue o'
+                  `notice` "Encoding should be a dictionary")
+    case HashMap.lookup "BaseEncoding" encDict of
+      Just (Name "WinAnsiEncoding") -> do
+        diffs <- loadEncodingDifferences pdf encDict
+        return $ Just SimpleFontEncoding
+          { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
+          , simpleFontDifferences = diffs
+          }
+      Just (Name "MacRomanEncoding") -> do
+        diffs <- loadEncodingDifferences pdf encDict
+        return $ Just SimpleFontEncoding
+          { simpleFontBaseEncoding = FontBaseEncodingMacRoman
+          , simpleFontDifferences = diffs
+          }
+      Nothing -> do
+        diffs <- loadEncodingDifferences pdf encDict
+        return $ Just SimpleFontEncoding
+          -- XXX: should be StandardEncoding?
+          { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
+          , simpleFontDifferences = diffs
+          }
+      _ -> return Nothing
+  _ -> return Nothing
+
+loadFontInfoType1 :: Pdf -> Dict -> IO FISimple
+loadFontInfoType1 pdf fontDict = do
+  toUnicode <- loadUnicodeCMap pdf fontDict
+  encoding <- loadFontInfoSimpleEncoding pdf fontDict
+  
+  widths <- do 
+    baseFont <- sure $ (HashMap.lookup "BaseFont" fontDict >>= nameValue)
+          `notice` "BaseFont should be a name"
+    return $ Map.lookup baseFont fontMetrics
+
+  return $ FISimple
+    { fiSimpleUnicodeCMap = toUnicode
+    , fiSimpleEncoding = encoding
+    , fiSimpleWidths = widths
+    , fiSimpleFontMatrix = scale 0.001 0.001
+    }
+
 loadFontInfoSimple :: Pdf -> Dict -> IO FISimple
 loadFontInfoSimple pdf fontDict = do
   toUnicode <- loadUnicodeCMap pdf fontDict
 
-  encoding <-
-    case HashMap.lookup "Encoding" fontDict of
-      Just (Name "WinAnsiEncoding") -> return $ Just SimpleFontEncoding
-        { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
-        , simpleFontDifferences = []
-        }
-      Just (Name "MacRomanEncoding") -> return $ Just SimpleFontEncoding
-        { simpleFontBaseEncoding = FontBaseEncodingMacRoman
-        , simpleFontDifferences = []
-        }
-      Just o -> do
-        o' <- deref pdf o
-        encDict <- sure (dictValue o'
-                      `notice` "Encoding should be a dictionary")
-        case HashMap.lookup "BaseEncoding" encDict of
-          Just (Name "WinAnsiEncoding") -> do
-            diffs <- loadEncodingDifferences pdf encDict
-            return $ Just SimpleFontEncoding
-              { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
-              , simpleFontDifferences = diffs
-              }
-          Just (Name "MacRomanEncoding") -> do
-            diffs <- loadEncodingDifferences pdf encDict
-            return $ Just SimpleFontEncoding
-              { simpleFontBaseEncoding = FontBaseEncodingMacRoman
-              , simpleFontDifferences = diffs
-              }
-          Nothing -> do
-            diffs <- loadEncodingDifferences pdf encDict
-            return $ Just SimpleFontEncoding
-              -- XXX: should be StandardEncoding?
-              { simpleFontBaseEncoding = FontBaseEncodingWinAnsi
-              , simpleFontDifferences = diffs
-              }
-          _ -> return Nothing
-      _ -> return Nothing
+  encoding <- loadFontInfoSimpleEncoding pdf fontDict
 
   widths <-
-    case HashMap.lookup "Widths" fontDict of
+    case trace (show encoding) $ HashMap.lookup "Widths" fontDict of
       Nothing -> return Nothing
       Just v -> do
         v' <- deref pdf v
@@ -168,7 +191,7 @@ loadFontInfoSimple pdf fontDict = do
                 `notice` "FirstChar should be an integer"
         lastChar <- sure $ (HashMap.lookup "LastChar" fontDict >>= intValue)
                 `notice` "LastChar should be an integer"
-        return $ Just (firstChar, lastChar, widths)
+        return $ Just . Map.fromList $ Prelude.zip [firstChar..] widths
 
   return $ FISimple
     { fiSimpleUnicodeCMap = toUnicode
