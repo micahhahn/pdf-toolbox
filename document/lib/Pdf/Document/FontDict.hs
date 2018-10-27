@@ -179,7 +179,7 @@ loadFontInfoSimple pdf fontDict = do
   encoding <- loadFontInfoSimpleEncoding pdf fontDict
 
   widths <-
-    case trace (show encoding) $ HashMap.lookup "Widths" fontDict of
+    case HashMap.lookup "Widths" fontDict of
       Nothing -> return Nothing
       Just v -> do
         v' <- deref pdf v
