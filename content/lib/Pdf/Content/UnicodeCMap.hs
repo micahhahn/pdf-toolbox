@@ -65,7 +65,7 @@ unicodeCMapNextGlyph cmap = go 1
       else if any (inRange glyph) (unicodeCMapCodeRanges cmap)
              then Just (toCode glyph, ByteString.drop n str)
              else go (n + 1) str
-  inRange glyph (start, end) = glyph >= start && glyph <= end
+  inRange glyph (start, end) = ByteString.length glyph == ByteString.length start && glyph >= start && glyph <= end
 
 toCode :: ByteString -> Int
 toCode bs = fst $ ByteString.foldr (\b (sm, i) ->
