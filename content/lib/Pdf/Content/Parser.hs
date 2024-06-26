@@ -41,9 +41,22 @@ readNextOperator is = message "readNextOperator" $ go []
 parseContent :: Parser (Maybe Expr)
 parseContent = do
   skipSpace
-  (Parser.endOfInput >> return Nothing) <|>
-    fmap Just (fmap Obj parseObject <|>
-               fmap (Op . toOp) (Parser.takeWhile1 isRegularChar))
+  expr <- 
+    (Parser.endOfInput >> return Nothing) <|>
+      fmap Just (fmap Obj parseObject <|>
+                 fmap (Op . toOp) (Parser.takeWhile1 isRegularChar))
+
+  case expr of
+    Just (Op Op_ID) ->
+      Parser.scan
+        ('I', 'D')
+        ( \(ppChar, pChar) char ->
+              if ppChar == 'E' && pChar == 'I'
+                then Nothing
+                else Just (pChar, char)
+        ) >> pure expr
+    _ ->
+      pure expr
 
 -- Treat comments as spaces
 skipSpace :: Parser ()
